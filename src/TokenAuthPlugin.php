@@ -10,6 +10,7 @@ use Webpatser\Resonate\Plugins\PluginContext;
 use Webpatser\Resonate\Protocols\Pusher\EventHandler;
 use Webpatser\ResonateTokenAuth\Contracts\ChannelAuthorizer;
 use Webpatser\ResonateTokenAuth\Contracts\TokenAuthenticator;
+use Webpatser\ResonateTokenAuth\Events\TokenRejected;
 
 /**
  * Lets a connection subscribe to private and presence channels with a token
@@ -96,16 +97,20 @@ class TokenAuthPlugin implements MessageInterceptor, ServerPlugin
             return MessageDisposition::Relay;
         }
 
+        $tokenSupplied = isset($data['token']) && is_string($data['token']) && $data['token'] !== '';
         $claims = $this->resolveClaims($from, $data);
 
         if ($claims === null) {
-            $this->reject($from, 'Token required for protected channel');
+            $reason = $tokenSupplied ? TokenRejected::INVALID_TOKEN : TokenRejected::MISSING_TOKEN;
+            $message = $tokenSupplied ? 'Invalid token' : 'Token required for protected channel';
+
+            $this->reject($from, $message, $reason);
 
             return MessageDisposition::Rejected;
         }
 
         if (! $this->authorizer->authorize($claims, $channel)) {
-            $this->reject($from, 'Token not authorized for channel');
+            $this->reject($from, 'Token not authorized for channel', TokenRejected::UNAUTHORIZED_CHANNEL);
 
             return MessageDisposition::Rejected;
         }
@@ -123,7 +128,7 @@ class TokenAuthPlugin implements MessageInterceptor, ServerPlugin
         $token = (string) ($data['token'] ?? '');
 
         if ($token === '') {
-            $this->reject($from, 'Missing token');
+            $this->reject($from, 'Missing token', TokenRejected::MISSING_TOKEN);
 
             return MessageDisposition::Rejected;
         }
@@ -131,7 +136,7 @@ class TokenAuthPlugin implements MessageInterceptor, ServerPlugin
         $claims = $this->authenticator->validate($token);
 
         if ($claims === null) {
-            $this->reject($from, 'Invalid token');
+            $this->reject($from, 'Invalid token', TokenRejected::INVALID_TOKEN);
 
             return MessageDisposition::Rejected;
         }
@@ -215,11 +220,13 @@ class TokenAuthPlugin implements MessageInterceptor, ServerPlugin
      * Send a Pusher-format error frame; the connection itself stays open so
      * the client can retry with a fresh token.
      */
-    protected function reject(Connection $from, string $message): void
+    protected function reject(Connection $from, string $message, string $reason): void
     {
         $this->context->sendTo($from, 'pusher:error', [
             'code' => 4009,
             'message' => $message,
         ]);
+
+        TokenRejected::dispatch($reason);
     }
 }

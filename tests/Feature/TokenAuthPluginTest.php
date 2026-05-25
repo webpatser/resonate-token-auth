@@ -1,10 +1,12 @@
 <?php
 
 use Firebase\JWT\JWT;
+use Illuminate\Support\Facades\Event;
 use Webpatser\Resonate\Contracts\ApplicationProvider;
 use Webpatser\Resonate\Plugins\MessageDisposition;
 use Webpatser\Resonate\Plugins\PluginContext;
 use Webpatser\Resonate\Protocols\Pusher\Contracts\ChannelManager;
+use Webpatser\ResonateTokenAuth\Events\TokenRejected;
 use Webpatser\ResonateTokenAuth\Tests\Support\FakeConnection;
 use Webpatser\ResonateTokenAuth\TokenAuthPlugin;
 use Webpatser\ResonateTokenAuth\TokenClaims;
@@ -73,6 +75,7 @@ it('subscribes a presence channel with channel_data derived from claims', functi
 });
 
 it('rejects a subscribe with an invalid token', function () {
+    Event::fake([TokenRejected::class]);
     $plugin = bootPlugin();
     $connection = makeConnection();
 
@@ -84,9 +87,12 @@ it('rejects a subscribe with an invalid token', function () {
     expect($disposition)->toBe(MessageDisposition::Rejected)
         ->and($connection->received('pusher:error'))->toBeTrue()
         ->and(app(ChannelManager::class)->for(app('app-fixture'))->find('private-billing'))->toBeNull();
+
+    Event::assertDispatched(TokenRejected::class, fn (TokenRejected $e) => $e->reason === TokenRejected::INVALID_TOKEN);
 });
 
 it('rejects a subscribe with a token not authorized for the channel', function () {
+    Event::fake([TokenRejected::class]);
     $plugin = bootPlugin();
     $connection = makeConnection();
 
@@ -100,6 +106,8 @@ it('rejects a subscribe with a token not authorized for the channel', function (
 
     expect($disposition)->toBe(MessageDisposition::Rejected)
         ->and($connection->received('pusher:error'))->toBeTrue();
+
+    Event::assertDispatched(TokenRejected::class, fn (TokenRejected $e) => $e->reason === TokenRejected::UNAUTHORIZED_CHANNEL);
 });
 
 it('relays a subscribe that already carries an HMAC auth field', function () {
@@ -154,6 +162,7 @@ it('caches claims on pre-authentication and lets a tokenless subscribe through',
 });
 
 it('rejects pre-authentication with an invalid token', function () {
+    Event::fake([TokenRejected::class]);
     $plugin = bootPlugin();
     $connection = makeConnection();
 
@@ -165,9 +174,12 @@ it('rejects pre-authentication with an invalid token', function () {
     expect($disposition)->toBe(MessageDisposition::Rejected)
         ->and($connection->received('pusher:error'))->toBeTrue()
         ->and($connection->state('token.claims'))->toBeNull();
+
+    Event::assertDispatched(TokenRejected::class, fn (TokenRejected $e) => $e->reason === TokenRejected::INVALID_TOKEN);
 });
 
 it('rejects a tokenless subscribe when no pre-auth happened', function () {
+    Event::fake([TokenRejected::class]);
     $plugin = bootPlugin();
     $connection = makeConnection();
 
@@ -178,6 +190,8 @@ it('rejects a tokenless subscribe when no pre-auth happened', function () {
 
     expect($disposition)->toBe(MessageDisposition::Rejected)
         ->and($connection->received('pusher:error'))->toBeTrue();
+
+    Event::assertDispatched(TokenRejected::class, fn (TokenRejected $e) => $e->reason === TokenRejected::MISSING_TOKEN);
 });
 
 it('does not change identity on a second pre-authenticate', function () {

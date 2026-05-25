@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-25
+
+### Added
+
+- `Events\TokenRejected`: a Laravel event dispatched once per token rejection
+  with a stable, low-cardinality `reason` (`missing_token`, `invalid_token`,
+  `unauthorized_channel`) exposed as public constants. Used by
+  `webpatser/resonate-pulse v0.2` to chart rejections by reason.
+
+### Changed
+
+- The subscribe rejection path now distinguishes between "no token supplied"
+  (`missing_token`) and "token supplied but invalid" (`invalid_token`). The
+  Pusher error message reflects the same distinction.
+
 ## [0.1.0] - 2026-05-25
 
 Initial release.
@@ -33,5 +48,6 @@ Initial release.
 - `TokenAuthServiceProvider`: merges config and binds the two defaults;
   publishes config via `vendor:publish --tag=resonate-token-auth-config`.
 
-[Unreleased]: https://github.com/webpatser/resonate-token-auth/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/webpatser/resonate-token-auth/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/webpatser/resonate-token-auth/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/webpatser/resonate-token-auth/releases/tag/v0.1.0
