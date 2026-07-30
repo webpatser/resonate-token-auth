@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-30
+
+### Changed
+
+- Widen the `webpatser/resonate` constraint to `^0.4|^0.5`. Composer treats a
+  `^0.4` caret on a 0.x package as `>=0.4 <0.5`, so this package could not be
+  installed next to a server running Resonate v0.5 even though the suite passes
+  against it. Both major lines are now accepted.
+
+## [0.2.1] - 2026-07-30
+
+### Changed
+
+- CI gates on Laravel Pint and on PHPStan at level 8, with no baseline and no
+  suppressions. Plain `phpstan/phpstan` is used rather than larastan, whose
+  Testbench application boot fails on an unrelated
+  `webpatser/resonate` / `fledge-fiber` `Http\Client\Factory` incompatibility.
+- `TokenAuthPlugin::authenticate()` and `resolveClaims()` take the already
+  null-checked authenticator as a parameter instead of re-reading the nullable
+  property. Behaviour is unchanged; this satisfies level 8 null safety.
+- Dropped a redundant empty-string check on a `json_encode()` result that
+  PHPStan proved is always non-empty.
+- Added a tests and dependency-audit workflow: the suite runs on PHP 8.5 and
+  `composer audit` fails the build on known-vulnerable production dependencies,
+  on push to the default branch and on pull requests.
+
 ## [0.2.0] - 2026-05-25
 
 ### Added
