@@ -77,7 +77,7 @@ class TokenAuthPlugin implements MessageInterceptor, ServerPlugin
         }
 
         if ($name === 'app:authenticate') {
-            return $this->authenticate($from, (array) ($event['data'] ?? []));
+            return $this->authenticate($this->authenticator, $from, (array) ($event['data'] ?? []));
         }
 
         if ($name !== 'pusher:subscribe') {
@@ -98,7 +98,7 @@ class TokenAuthPlugin implements MessageInterceptor, ServerPlugin
         }
 
         $tokenSupplied = isset($data['token']) && is_string($data['token']) && $data['token'] !== '';
-        $claims = $this->resolveClaims($from, $data);
+        $claims = $this->resolveClaims($this->authenticator, $from, $data);
 
         if ($claims === null) {
             $reason = $tokenSupplied ? TokenRejected::INVALID_TOKEN : TokenRejected::MISSING_TOKEN;
@@ -122,8 +122,10 @@ class TokenAuthPlugin implements MessageInterceptor, ServerPlugin
 
     /**
      * Pre-authenticate a connection from an `app:authenticate` event.
+     *
+     * @param  array<string, mixed>  $data
      */
-    protected function authenticate(Connection $from, array $data): MessageDisposition
+    protected function authenticate(TokenAuthenticator $authenticator, Connection $from, array $data): MessageDisposition
     {
         $token = (string) ($data['token'] ?? '');
 
@@ -133,7 +135,7 @@ class TokenAuthPlugin implements MessageInterceptor, ServerPlugin
             return MessageDisposition::Rejected;
         }
 
-        $claims = $this->authenticator->validate($token);
+        $claims = $authenticator->validate($token);
 
         if ($claims === null) {
             $this->reject($from, 'Invalid token', TokenRejected::INVALID_TOKEN);
@@ -160,10 +162,10 @@ class TokenAuthPlugin implements MessageInterceptor, ServerPlugin
      *
      * @param  array<string, mixed>  $data
      */
-    protected function resolveClaims(Connection $from, array $data): ?TokenClaims
+    protected function resolveClaims(TokenAuthenticator $authenticator, Connection $from, array $data): ?TokenClaims
     {
         if (isset($data['token']) && is_string($data['token']) && $data['token'] !== '') {
-            return $this->authenticator->validate($data['token']);
+            return $authenticator->validate($data['token']);
         }
 
         $cached = $from->state('token.claims');
@@ -190,7 +192,7 @@ class TokenAuthPlugin implements MessageInterceptor, ServerPlugin
 
         $signaturePayload = $from->id().':'.$channel;
 
-        if ($channelData !== null && $channelData !== '') {
+        if ($channelData !== null) {
             $signaturePayload .= ':'.$channelData;
         }
 

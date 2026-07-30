@@ -30,5 +30,11 @@ jobs:
       - name: Audit dependencies for known vulnerabilities
         run: composer audit --no-dev
 
+      - name: Check code style
+        run: ./vendor/bin/pint --test
+
+      - name: Run static analysis
+        run: ./vendor/bin/phpstan analyse
+
       - name: Run tests
         run: ./vendor/bin/pest
