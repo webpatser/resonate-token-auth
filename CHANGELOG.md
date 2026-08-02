@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Tokens are now bound to an application.** Nothing in the token path compared
+  a claim against the connection's application, while the JWT settings
+  (`algorithm`, `secret`, `issuer`, `audience`) are a single global block. On a
+  multi-application server one tenant's valid token was therefore accepted on
+  another tenant's app key, and the plugin then synthesized *that* app's HMAC
+  for it, placing the wrong user inside the wrong private and presence channels.
+  A token must now carry an application-binding claim (`app_id` by default,
+  remappable via `claims.app_id`) matching the connection's application id.
+- **A malformed or emptied `channels` claim no longer fails open.** A `channels`
+  claim that was present but empty, or present and not a list of strings,
+  collapsed to an empty allow-list, which `DefaultChannelAuthorizer` read as
+  "no restriction": malformed input opened *every* private and presence channel.
+  An absent claim is now distinguished from a present one. A present but empty
+  allow-list permits nothing, and a claim that is not a list of strings is
+  rejected outright as an invalid token.
+- **`exp` is required.** `firebase/php-jwt` only validates `exp` when the claim
+  is present, so a token minted without one was valid forever. The default
+  validator now rejects any token that does not carry one.
+- **Cached claims are re-checked on every subscribe.** Claims cached by
+  `app:authenticate` were validated once and then trusted for the life of the
+  socket, so a connection that pre-authenticated with a short-lived token kept
+  opening new subscriptions long after it expired. Expiry is now re-checked
+  before each subscribe that relies on the cache.
+- `JwtAuthenticator` no longer leaks its clock leeway. It assigned the global
+  static `Firebase\JWT\JWT::$leeway` and never restored it, so this package's
+  window silently widened the clock tolerance of every other firebase/php-jwt
+  consumer in the process. The previous value is now restored, including when
+  decoding throws.
+
+### Added
+
+- `require_app_claim` config flag (default `true`, env
+  `RESONATE_TOKEN_AUTH_REQUIRE_APP_CLAIM`). It decides only whether a token
+  carrying *no* application binding is accepted; a claim naming a different
+  application is rejected either way. Set it to `false` to migrate issuers that
+  do not mint the claim yet, then back to `true`. See the README for the
+  rollout steps.
+- `claims.app_id` config key (default `app_id`, env
+  `RESONATE_TOKEN_AUTH_APP_ID_CLAIM`) to remap the binding claim.
+- `TokenRejected::APPLICATION_MISMATCH` (`application_mismatch`) and
+  `TokenRejected::EXPIRED_TOKEN` (`expired_token`) reason constants, so metrics
+  consumers can bucket cross-tenant attempts and stale pre-auth separately from
+  `invalid_token`.
+- `TokenClaims::expiresAt()` and `TokenClaims::hasExpired()`.
+
+### Changed
+
+- **API:** `TokenClaims::$channels` and `TokenClaims::channels()` are now
+  `list<string>|null` instead of `list<string>`, and the constructor default is
+  `null` rather than `[]`. `null` means "the token carried no allow-list, so no
+  token-level restriction"; `[]` now means "an allow-list that permits nothing".
+  A custom `ChannelAuthorizer` that treated `[] === "no restriction"` must be
+  updated to check for `null`.
+- **Behaviour:** upgrading rejects tokens that carry no application-binding
+  claim until issuers are updated or `require_app_claim` is set to `false`, and
+  rejects tokens minted without `exp` outright.
+- A custom `TokenAuthenticator` must carry `exp` and the application-binding
+  claim through into the `TokenClaims` raw bag; claims with no readable `exp`
+  are treated as expired rather than as never expiring.
+
 ## [0.2.2] - 2026-07-30
 
 ### Changed

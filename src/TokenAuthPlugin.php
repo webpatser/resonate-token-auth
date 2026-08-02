@@ -30,6 +30,11 @@ use Webpatser\ResonateTokenAuth\Events\TokenRejected;
  * The plugin **complements** standard HMAC auth: a subscribe that already
  * carries an `auth` field is relayed untouched. Browser clients with cookies
  * and token-bearing clients coexist on the same server.
+ *
+ * Every token, on either flow, must also be bound to the application it is
+ * presented on (see {@see boundToApplication()}), and cached pre-auth claims
+ * are re-checked against their `exp` on every subscribe so a connection cannot
+ * outlive the token that authenticated it.
  */
 class TokenAuthPlugin implements MessageInterceptor, ServerPlugin
 {
@@ -49,13 +54,36 @@ class TokenAuthPlugin implements MessageInterceptor, ServerPlugin
     protected ?ChannelAuthorizer $authorizer = null;
 
     /**
-     * Boot the plugin: resolve the authenticator and authorizer.
+     * Which claim carries the application binding.
+     */
+    protected string $appClaim = 'app_id';
+
+    /**
+     * Whether a token must carry the application-binding claim at all.
+     */
+    protected bool $requireAppClaim = true;
+
+    /**
+     * Clock skew, in seconds, allowed when re-checking cached claims.
+     */
+    protected int $leeway = 30;
+
+    /**
+     * Boot the plugin: resolve the authenticator and authorizer, and read the
+     * settings the plugin itself enforces (application binding, leeway).
      */
     public function boot(PluginContext $context): void
     {
         $this->context = $context;
         $this->authenticator = app(TokenAuthenticator::class);
         $this->authorizer = app(ChannelAuthorizer::class);
+
+        $config = (array) config('resonate-token-auth', []);
+        $claims = (array) ($config['claims'] ?? []);
+
+        $this->appClaim = (string) ($claims['app_id'] ?? 'app_id');
+        $this->requireAppClaim = (bool) ($config['require_app_claim'] ?? true);
+        $this->leeway = (int) ($config['leeway'] ?? 30);
     }
 
     /**
@@ -109,6 +137,24 @@ class TokenAuthPlugin implements MessageInterceptor, ServerPlugin
             return MessageDisposition::Rejected;
         }
 
+        // Cached pre-auth claims are only validated once, at `app:authenticate`
+        // time, and then live as long as the socket does. A connection that
+        // authenticated with a five minute token could therefore keep opening
+        // new subscriptions for hours, so the expiry is re-checked here, on
+        // every subscribe that leans on the cache. A token supplied with this
+        // very subscribe was just validated, expiry included.
+        if (! $tokenSupplied && $claims->hasExpired($this->leeway)) {
+            $this->reject($from, 'Token expired, re-authenticate', TokenRejected::EXPIRED_TOKEN);
+
+            return MessageDisposition::Rejected;
+        }
+
+        if (! $this->boundToApplication($claims, $from)) {
+            $this->reject($from, 'Token not valid for this application', TokenRejected::APPLICATION_MISMATCH);
+
+            return MessageDisposition::Rejected;
+        }
+
         if (! $this->authorizer->authorize($claims, $channel)) {
             $this->reject($from, 'Token not authorized for channel', TokenRejected::UNAUTHORIZED_CHANNEL);
 
@@ -139,6 +185,12 @@ class TokenAuthPlugin implements MessageInterceptor, ServerPlugin
 
         if ($claims === null) {
             $this->reject($from, 'Invalid token', TokenRejected::INVALID_TOKEN);
+
+            return MessageDisposition::Rejected;
+        }
+
+        if (! $this->boundToApplication($claims, $from)) {
+            $this->reject($from, 'Token not valid for this application', TokenRejected::APPLICATION_MISMATCH);
 
             return MessageDisposition::Rejected;
         }
@@ -207,6 +259,37 @@ class TokenAuthPlugin implements MessageInterceptor, ServerPlugin
             'auth' => $auth,
             'channel_data' => $channelData,
         ]);
+    }
+
+    /**
+     * Determine whether the claims are bound to the connection's application.
+     *
+     * Resonate can serve many applications from one process, each with its own
+     * key and secret, while the JWT settings here (algorithm, secret, issuer,
+     * audience) are a single global block. Without this check a token minted
+     * for tenant A is a valid token *everywhere*: presented on tenant B's app
+     * key it validates against the same secret, and the plugin then synthesizes
+     * B's HMAC for it, so A's user lands inside B's private and presence
+     * channels. Nothing else in the path ever looks at which app is in play.
+     *
+     * A claim that is present and does not match is always fatal.
+     * `require_app_claim` only decides whether a token carrying no binding at
+     * all is still accepted, which is the migration switch for issuers minting
+     * tokens from before this was enforced. It never permits a mismatch.
+     */
+    protected function boundToApplication(TokenClaims $claims, Connection $from): bool
+    {
+        $claimed = $claims->claim($this->appClaim);
+
+        if ($claimed === null) {
+            return ! $this->requireAppClaim;
+        }
+
+        if (! is_string($claimed) && ! is_int($claimed)) {
+            return false;
+        }
+
+        return (string) $claimed === $from->app()->id();
     }
 
     /**

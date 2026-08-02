@@ -7,13 +7,14 @@ function makeJwtAuthenticator(
     ?string $issuer = null,
     ?string $audience = null,
     array $claimMap = ['user_id' => 'sub', 'user_info' => 'user_info', 'channels' => 'channels'],
+    int $leeway = 30,
 ): JwtAuthenticator {
     return new JwtAuthenticator(
         algorithm: 'HS256',
         key: 'jwt-test-secret-padded-to-thirty-two-bytes-or-more-for-hs256',
         issuer: $issuer,
         audience: $audience,
-        leeway: 30,
+        leeway: $leeway,
         claimMap: $claimMap,
     );
 }
@@ -88,4 +89,63 @@ it('honours a custom claim map', function () {
 it('returns null for garbage input', function () {
     expect(makeJwtAuthenticator()->validate('not.a.jwt'))->toBeNull()
         ->and(makeJwtAuthenticator()->validate(''))->toBeNull();
+});
+
+it('returns null for a token minted without an exp claim', function () {
+    // php-jwt only checks exp when it is present, so a token without one used
+    // to decode cleanly and stay valid forever.
+    $token = JWT::encode(
+        ['sub' => 'u-1', 'iat' => time()],
+        'jwt-test-secret-padded-to-thirty-two-bytes-or-more-for-hs256',
+        'HS256',
+    );
+
+    expect(makeJwtAuthenticator()->validate($token))->toBeNull();
+});
+
+it('reports an absent channels claim as null, not as an empty allow-list', function () {
+    $claims = makeJwtAuthenticator()->validate(encodeJwt(['sub' => 'u-1']));
+
+    expect($claims->channels())->toBeNull();
+});
+
+it('keeps a present but empty channels claim as an empty allow-list', function () {
+    // The distinction is the whole fix: null means "no claim, no limit",
+    // [] means "the issuer sent an allow-list that permits nothing".
+    $claims = makeJwtAuthenticator()->validate(encodeJwt(['sub' => 'u-1', 'channels' => []]));
+
+    expect($claims->channels())->toBe([]);
+});
+
+it('rejects a channels claim that is not a list of strings', function (mixed $channels) {
+    $token = encodeJwt(['sub' => 'u-1', 'channels' => $channels]);
+
+    expect(makeJwtAuthenticator()->validate($token))->toBeNull();
+})->with([
+    'a bare string' => 'private-foo',
+    'an integer' => 5,
+    'a boolean' => true,
+    'an object' => [['room' => 'private-foo']],
+    'a list with a non-string entry' => [['private-foo', 5]],
+    'a list with a nested list' => [['private-foo', ['private-bar']]],
+]);
+
+it('restores the global JWT leeway after a successful decode', function () {
+    JWT::$leeway = 7;
+
+    makeJwtAuthenticator(leeway: 300)->validate(encodeJwt(['sub' => 'u-1']));
+
+    expect(JWT::$leeway)->toBe(7);
+
+    JWT::$leeway = 0;
+});
+
+it('restores the global JWT leeway when decoding throws', function () {
+    JWT::$leeway = 7;
+
+    makeJwtAuthenticator(leeway: 300)->validate('not.a.jwt');
+
+    expect(JWT::$leeway)->toBe(7);
+
+    JWT::$leeway = 0;
 });

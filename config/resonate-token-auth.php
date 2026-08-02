@@ -60,11 +60,33 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Application binding
+    |--------------------------------------------------------------------------
+    |
+    | Resonate can serve several applications from one process, each with its
+    | own key and secret, while the JWT settings above are global. A token must
+    | therefore say which application it was minted for, and the plugin rejects
+    | it on any other one; otherwise one tenant's token is accepted on every
+    | tenant's app key.
+    |
+    | A token whose binding claim names a different application is always
+    | rejected. This switch only decides what happens to a token that carries
+    | no binding claim at all: true (the default) rejects it, false accepts it.
+    | Set it to false only while migrating issuers that do not mint the claim
+    | yet, and put it back to true once they do.
+    |
+    */
+
+    'require_app_claim' => (bool) env('RESONATE_TOKEN_AUTH_REQUIRE_APP_CLAIM', true),
+
+    /*
+    |--------------------------------------------------------------------------
     | Claim mapping
     |--------------------------------------------------------------------------
     |
     | Which JWT claims the validator reads for the user id, the optional
-    | presence user info, and the optional per-token channel allow-list.
+    | presence user info, the optional per-token channel allow-list, and the
+    | application the token is bound to.
     |
     */
 
@@ -72,6 +94,7 @@ return [
         'user_id' => env('RESONATE_TOKEN_AUTH_USER_ID_CLAIM', 'sub'),
         'user_info' => env('RESONATE_TOKEN_AUTH_USER_INFO_CLAIM', 'user_info'),
         'channels' => env('RESONATE_TOKEN_AUTH_CHANNELS_CLAIM', 'channels'),
+        'app_id' => env('RESONATE_TOKEN_AUTH_APP_ID_CLAIM', 'app_id'),
     ],
 
 ];

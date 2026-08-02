@@ -36,8 +36,16 @@ it('rejects a channel not in the per-token allow-list', function () {
     expect($authorizer->authorize($claims, 'private-other'))->toBeFalse();
 });
 
-it('treats an empty channels claim as no limit', function () {
+it('treats an absent channels claim as no limit', function () {
     $authorizer = new DefaultChannelAuthorizer;
 
-    expect($authorizer->authorize(new TokenClaims('u-7', channels: []), 'private-anything'))->toBeTrue();
+    expect($authorizer->authorize(new TokenClaims('u-7', channels: null), 'private-anything'))->toBeTrue();
+});
+
+it('denies every channel when the channels claim is present but empty', function () {
+    $authorizer = new DefaultChannelAuthorizer;
+    $claims = new TokenClaims('u-7', channels: []);
+
+    expect($authorizer->authorize($claims, 'private-anything'))->toBeFalse()
+        ->and($authorizer->authorize($claims, 'presence-room'))->toBeFalse();
 });

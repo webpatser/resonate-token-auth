@@ -13,7 +13,8 @@ use Webpatser\ResonateTokenAuth\Contracts\TokenAuthenticator;
  * Supports HS256/HS384/HS512 with a shared secret and RS256/RS384/RS512 plus
  * ES256/ES384 with a PEM public key. The library checks `exp`, `nbf`, and
  * `iat` automatically (with the configured leeway); this class additionally
- * enforces `iss` and `aud` when they are configured.
+ * requires `exp` to be present at all, enforces `iss` and `aud` when they are
+ * configured, and rejects a malformed `channels` claim rather than coercing it.
  */
 class JwtAuthenticator implements TokenAuthenticator
 {
@@ -36,14 +37,20 @@ class JwtAuthenticator implements TokenAuthenticator
      */
     public function validate(string $token): ?TokenClaims
     {
-        // The library reads leeway from a static property, so set it for this
-        // decode. The window is small and the property is process-local.
+        // The library reads leeway from a global static, so it is set for the
+        // span of this decode and put back afterwards. Assigning it and walking
+        // away leaked this package's window into every other firebase/php-jwt
+        // consumer in the process (API guards, queue workers, other packages),
+        // which silently widened their clock tolerance for the rest of the run.
+        $previousLeeway = JWT::$leeway;
         JWT::$leeway = $this->leeway;
 
         try {
             $decoded = JWT::decode($token, new Key($this->key, $this->algorithm));
         } catch (Throwable) {
             return null;
+        } finally {
+            JWT::$leeway = $previousLeeway;
         }
 
         try {
@@ -53,6 +60,13 @@ class JwtAuthenticator implements TokenAuthenticator
         }
 
         if (! is_array($claims)) {
+            return null;
+        }
+
+        // php-jwt only validates `exp` when the claim is there, so a token
+        // minted without one decoded cleanly and never went stale. Presence is
+        // mandatory here; the library has already checked the value itself.
+        if (! is_numeric($claims['exp'] ?? null)) {
             return null;
         }
 
@@ -71,12 +85,36 @@ class JwtAuthenticator implements TokenAuthenticator
             return null;
         }
 
-        $channels = $claims[$this->claimMap['channels'] ?? 'channels'] ?? [];
+        $channelsClaim = $this->claimMap['channels'] ?? 'channels';
+        $channels = null;
+
+        if (array_key_exists($channelsClaim, $claims)) {
+            $declared = $claims[$channelsClaim];
+
+            // A malformed allow-list is a rejection, not something to coerce.
+            // The old `(array) $declared` plus is_string filter quietly turned a
+            // scalar, an object, or a list with junk in it into an empty array,
+            // and an empty array used to mean "no restriction": malformed input
+            // failed open onto every private and presence channel on the server.
+            if (! is_array($declared) || ! array_is_list($declared)) {
+                return null;
+            }
+
+            $channels = [];
+
+            foreach ($declared as $pattern) {
+                if (! is_string($pattern)) {
+                    return null;
+                }
+
+                $channels[] = $pattern;
+            }
+        }
 
         return new TokenClaims(
             userId: (string) $userId,
             userInfo: $claims[$this->claimMap['user_info'] ?? 'user_info'] ?? null,
-            channels: array_values(array_filter((array) $channels, 'is_string')),
+            channels: $channels,
             raw: $claims,
         );
     }

@@ -23,7 +23,26 @@ function bootPlugin(): TokenAuthPlugin
     return $plugin;
 }
 
+/**
+ * Mint a token for the test application.
+ *
+ * `app_id` is part of the baseline because the plugin now requires every token
+ * to say which application it was minted for; pass it explicitly to override.
+ */
 function makeToken(array $claims = []): string
+{
+    return JWT::encode(
+        $claims + ['sub' => 'u-1', 'app_id' => 'app-id', 'iat' => time(), 'exp' => time() + 60],
+        'jwt-test-secret-padded-to-thirty-two-bytes-or-more-for-hs256',
+        'HS256',
+    );
+}
+
+/**
+ * Mint an otherwise valid token that names no application at all, the shape
+ * every issuer produced before the binding claim existed.
+ */
+function makeUnboundToken(array $claims = []): string
 {
     return JWT::encode(
         $claims + ['sub' => 'u-1', 'iat' => time(), 'exp' => time() + 60],
@@ -211,6 +230,185 @@ it('does not change identity on a second pre-authenticate', function () {
     $claims = $connection->state('token.claims');
 
     expect($claims->userId())->toBe('u-first');
+});
+
+it('rejects a subscribe with a token minted for another application', function () {
+    Event::fake([TokenRejected::class]);
+    $plugin = bootPlugin();
+    $connection = makeConnection();
+
+    // A valid token for tenant "other-app", replayed on this app's key. The
+    // JWT settings are global, so it verifies; only the binding claim stops it.
+    $disposition = $plugin->onMessage($connection, [
+        'event' => 'pusher:subscribe',
+        'data' => ['channel' => 'private-billing', 'token' => makeToken(['app_id' => 'other-app'])],
+    ]);
+
+    expect($disposition)->toBe(MessageDisposition::Rejected)
+        ->and($connection->received('pusher:error'))->toBeTrue()
+        ->and(app(ChannelManager::class)->for(app('app-fixture'))->find('private-billing'))->toBeNull();
+
+    Event::assertDispatched(TokenRejected::class, fn (TokenRejected $e) => $e->reason === TokenRejected::APPLICATION_MISMATCH);
+});
+
+it('rejects a pre-authenticate with a token minted for another application', function () {
+    Event::fake([TokenRejected::class]);
+    $plugin = bootPlugin();
+    $connection = makeConnection();
+
+    $disposition = $plugin->onMessage($connection, [
+        'event' => 'app:authenticate',
+        'data' => ['token' => makeToken(['app_id' => 'other-app'])],
+    ]);
+
+    expect($disposition)->toBe(MessageDisposition::Rejected)
+        ->and($connection->received('app:authenticated'))->toBeFalse()
+        ->and($connection->state('token.claims'))->toBeNull();
+
+    Event::assertDispatched(TokenRejected::class, fn (TokenRejected $e) => $e->reason === TokenRejected::APPLICATION_MISMATCH);
+});
+
+it('rejects a token carrying no application binding by default', function () {
+    Event::fake([TokenRejected::class]);
+    $plugin = bootPlugin();
+    $connection = makeConnection();
+
+    $disposition = $plugin->onMessage($connection, [
+        'event' => 'pusher:subscribe',
+        'data' => ['channel' => 'private-billing', 'token' => makeUnboundToken()],
+    ]);
+
+    expect($disposition)->toBe(MessageDisposition::Rejected)
+        ->and(app(ChannelManager::class)->for(app('app-fixture'))->find('private-billing'))->toBeNull();
+
+    Event::assertDispatched(TokenRejected::class, fn (TokenRejected $e) => $e->reason === TokenRejected::APPLICATION_MISMATCH);
+});
+
+it('accepts a token carrying no application binding when the requirement is off', function () {
+    config()->set('resonate-token-auth.require_app_claim', false);
+
+    $plugin = bootPlugin();
+    $connection = makeConnection();
+
+    $disposition = $plugin->onMessage($connection, [
+        'event' => 'pusher:subscribe',
+        'data' => ['channel' => 'private-billing', 'token' => makeUnboundToken()],
+    ]);
+
+    expect($disposition)->toBe(MessageDisposition::Handled)
+        ->and($connection->received('pusher_internal:subscription_succeeded'))->toBeTrue();
+});
+
+it('still rejects a mismatching application binding when the requirement is off', function () {
+    // The switch only forgives a missing claim. A claim naming another tenant
+    // is always fatal, otherwise the escape hatch would reopen the hole.
+    config()->set('resonate-token-auth.require_app_claim', false);
+
+    Event::fake([TokenRejected::class]);
+    $plugin = bootPlugin();
+    $connection = makeConnection();
+
+    $disposition = $plugin->onMessage($connection, [
+        'event' => 'pusher:subscribe',
+        'data' => ['channel' => 'private-billing', 'token' => makeToken(['app_id' => 'other-app'])],
+    ]);
+
+    expect($disposition)->toBe(MessageDisposition::Rejected);
+
+    Event::assertDispatched(TokenRejected::class, fn (TokenRejected $e) => $e->reason === TokenRejected::APPLICATION_MISMATCH);
+});
+
+it('rejects a subscribe on cached claims whose token has expired', function () {
+    Event::fake([TokenRejected::class]);
+    $plugin = bootPlugin();
+    $connection = makeConnection();
+
+    // Pre-auth claims live as long as the socket does, so a short-lived token
+    // used to buy unlimited subscribes for the life of the connection.
+    $connection->setState('token.claims', new TokenClaims(
+        userId: 'u-1',
+        raw: ['exp' => time() - 3600, 'app_id' => 'app-id'],
+    ));
+
+    $disposition = $plugin->onMessage($connection, [
+        'event' => 'pusher:subscribe',
+        'data' => ['channel' => 'private-billing'],
+    ]);
+
+    expect($disposition)->toBe(MessageDisposition::Rejected)
+        ->and($connection->received('pusher:error'))->toBeTrue()
+        ->and(app(ChannelManager::class)->for(app('app-fixture'))->find('private-billing'))->toBeNull();
+
+    Event::assertDispatched(TokenRejected::class, fn (TokenRejected $e) => $e->reason === TokenRejected::EXPIRED_TOKEN);
+});
+
+it('allows a subscribe on cached claims that are still live', function () {
+    $plugin = bootPlugin();
+    $connection = makeConnection();
+
+    $connection->setState('token.claims', new TokenClaims(
+        userId: 'u-1',
+        raw: ['exp' => time() + 300, 'app_id' => 'app-id'],
+    ));
+
+    $disposition = $plugin->onMessage($connection, [
+        'event' => 'pusher:subscribe',
+        'data' => ['channel' => 'private-billing'],
+    ]);
+
+    expect($disposition)->toBe(MessageDisposition::Handled);
+});
+
+it('lets a fresh per-subscribe token override expired cached claims', function () {
+    $plugin = bootPlugin();
+    $connection = makeConnection();
+
+    $connection->setState('token.claims', new TokenClaims(
+        userId: 'u-1',
+        raw: ['exp' => time() - 3600, 'app_id' => 'app-id'],
+    ));
+
+    $disposition = $plugin->onMessage($connection, [
+        'event' => 'pusher:subscribe',
+        'data' => ['channel' => 'private-billing', 'token' => makeToken()],
+    ]);
+
+    expect($disposition)->toBe(MessageDisposition::Handled)
+        ->and($connection->received('pusher_internal:subscription_succeeded'))->toBeTrue();
+});
+
+it('rejects a subscribe whose token carries an emptied channels claim', function () {
+    Event::fake([TokenRejected::class]);
+    $plugin = bootPlugin();
+    $connection = makeConnection();
+
+    // End to end: an empty allow-list used to read as "no restriction" and
+    // opened every private and presence channel on the server.
+    $disposition = $plugin->onMessage($connection, [
+        'event' => 'pusher:subscribe',
+        'data' => ['channel' => 'private-billing', 'token' => makeToken(['channels' => []])],
+    ]);
+
+    expect($disposition)->toBe(MessageDisposition::Rejected)
+        ->and(app(ChannelManager::class)->for(app('app-fixture'))->find('private-billing'))->toBeNull();
+
+    Event::assertDispatched(TokenRejected::class, fn (TokenRejected $e) => $e->reason === TokenRejected::UNAUTHORIZED_CHANNEL);
+});
+
+it('rejects a subscribe whose token carries a malformed channels claim', function () {
+    Event::fake([TokenRejected::class]);
+    $plugin = bootPlugin();
+    $connection = makeConnection();
+
+    $disposition = $plugin->onMessage($connection, [
+        'event' => 'pusher:subscribe',
+        'data' => ['channel' => 'private-billing', 'token' => makeToken(['channels' => 'private-billing'])],
+    ]);
+
+    expect($disposition)->toBe(MessageDisposition::Rejected)
+        ->and(app(ChannelManager::class)->for(app('app-fixture'))->find('private-billing'))->toBeNull();
+
+    Event::assertDispatched(TokenRejected::class, fn (TokenRejected $e) => $e->reason === TokenRejected::INVALID_TOKEN);
 });
 
 it('relays unrelated events untouched', function () {
