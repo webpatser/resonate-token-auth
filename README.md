@@ -60,7 +60,7 @@ The plugin replies with `app:authenticated` and caches the validated claims on t
 
 The two flows coexist. A per-subscribe token always overrides the cached claims, so a stateless client never depends on connection-bound state.
 
-Cached claims are re-checked against their `exp` on every subscribe. A connection that pre-authenticated with a five minute token stops being able to open new subscriptions once those five minutes are up, instead of coasting for the life of the socket. Existing subscriptions are left alone; the client either sends a fresh token with the next subscribe (which overrides the stale cache) or reconnects and pre-authenticates again.
+Cached claims are re-checked against their `exp` (plus `leeway`) on every subscribe. A connection that pre-authenticated with a five minute token stops being able to open new subscriptions once those five minutes are up, instead of coasting for the life of the socket. The rejection carries reason `expired_token`. Existing subscriptions are left alone; the client either sends a fresh token with the next subscribe (which overrides the stale cache) or reconnects and pre-authenticates again.
 
 ### Tokens are bound to one application
 
@@ -122,6 +122,7 @@ RESONATE_TOKEN_AUTH_SECRET=your-shared-jwt-secret
 # RESONATE_TOKEN_AUTH_PUBLIC_KEY (PEM)        # for RS*/ES* algorithms
 # RESONATE_TOKEN_AUTH_ISSUER=https://your.app
 # RESONATE_TOKEN_AUTH_AUDIENCE=resonate
+# RESONATE_TOKEN_AUTH_REQUIRE_APP_CLAIM=false # only while migrating issuers
 ```
 
 | Key | Default | Purpose |
@@ -159,7 +160,9 @@ $this->app->bind(
 );
 ```
 
-`ChannelAuthorizer` is the same: bind your own for tenant rules, role checks, or external lookups.
+`ChannelAuthorizer` is the same: bind your own for tenant rules, role checks, or external lookups. `TokenClaims::channels()` returns `null` when the token carried no allow-list and a `list<string>` when it did, so an empty list allows nothing. An authorizer that reads `[]` as "no restriction" fails open.
+
+A custom `TokenAuthenticator` must pass `exp` and the application-binding claim through into `TokenClaims::$raw`: the plugin reads both from there.
 
 ## Issuing tokens
 

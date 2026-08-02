@@ -7,67 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-02
+
+This release rejects tokens that earlier versions accepted. Read
+[Upgrading](#upgrading) before deploying it.
+
 ### Security
 
-- **Tokens are now bound to an application.** Nothing in the token path compared
-  a claim against the connection's application, while the JWT settings
-  (`algorithm`, `secret`, `issuer`, `audience`) are a single global block. On a
-  multi-application server one tenant's valid token was therefore accepted on
-  another tenant's app key, and the plugin then synthesized *that* app's HMAC
-  for it, placing the wrong user inside the wrong private and presence channels.
-  A token must now carry an application-binding claim (`app_id` by default,
-  remappable via `claims.app_id`) matching the connection's application id.
-- **A malformed or emptied `channels` claim no longer fails open.** A `channels`
-  claim that was present but empty, or present and not a list of strings,
-  collapsed to an empty allow-list, which `DefaultChannelAuthorizer` read as
-  "no restriction": malformed input opened *every* private and presence channel.
-  An absent claim is now distinguished from a present one. A present but empty
-  allow-list permits nothing, and a claim that is not a list of strings is
-  rejected outright as an invalid token.
-- **`exp` is required.** `firebase/php-jwt` only validates `exp` when the claim
-  is present, so a token minted without one was valid forever. The default
-  validator now rejects any token that does not carry one.
-- **Cached claims are re-checked on every subscribe.** Claims cached by
-  `app:authenticate` were validated once and then trusted for the life of the
-  socket, so a connection that pre-authenticated with a short-lived token kept
-  opening new subscriptions long after it expired. Expiry is now re-checked
-  before each subscribe that relies on the cache.
-- `JwtAuthenticator` no longer leaks its clock leeway. It assigned the global
-  static `Firebase\JWT\JWT::$leeway` and never restored it, so this package's
-  window silently widened the clock tolerance of every other firebase/php-jwt
-  consumer in the process. The previous value is now restored, including when
-  decoding throws.
+- Bind tokens to an application: a token must carry a claim naming the
+  application it is presented on, or one tenant's token is valid on every
+  tenant's app key.
+- Deny on a `channels` claim that is present but empty, and reject one that is
+  not a list of strings. Both previously collapsed to "no restriction" and
+  opened every private and presence channel.
+- Require `exp`. `firebase/php-jwt` validates the value only when the claim is
+  present, so a token minted without one never expired.
+- Re-check cached pre-authentication claims against their `exp` on every
+  subscribe, so a socket cannot outlive the token that authenticated it.
+- Restore `Firebase\JWT\JWT::$leeway` after decoding. Assigning the global
+  static and walking away widened the clock tolerance of every other
+  firebase/php-jwt consumer in the process.
 
 ### Added
 
 - `require_app_claim` config flag (default `true`, env
-  `RESONATE_TOKEN_AUTH_REQUIRE_APP_CLAIM`). It decides only whether a token
-  carrying *no* application binding is accepted; a claim naming a different
-  application is rejected either way. Set it to `false` to migrate issuers that
-  do not mint the claim yet, then back to `true`. See the README for the
-  rollout steps.
+  `RESONATE_TOKEN_AUTH_REQUIRE_APP_CLAIM`): whether a token carrying no
+  application binding is accepted. A mismatching claim is rejected either way.
 - `claims.app_id` config key (default `app_id`, env
   `RESONATE_TOKEN_AUTH_APP_ID_CLAIM`) to remap the binding claim.
 - `TokenRejected::APPLICATION_MISMATCH` (`application_mismatch`) and
-  `TokenRejected::EXPIRED_TOKEN` (`expired_token`) reason constants, so metrics
-  consumers can bucket cross-tenant attempts and stale pre-auth separately from
-  `invalid_token`.
+  `TokenRejected::EXPIRED_TOKEN` (`expired_token`) reason constants.
 - `TokenClaims::expiresAt()` and `TokenClaims::hasExpired()`.
 
 ### Changed
 
-- **API:** `TokenClaims::$channels` and `TokenClaims::channels()` are now
-  `list<string>|null` instead of `list<string>`, and the constructor default is
-  `null` rather than `[]`. `null` means "the token carried no allow-list, so no
-  token-level restriction"; `[]` now means "an allow-list that permits nothing".
-  A custom `ChannelAuthorizer` that treated `[] === "no restriction"` must be
-  updated to check for `null`.
-- **Behaviour:** upgrading rejects tokens that carry no application-binding
-  claim until issuers are updated or `require_app_claim` is set to `false`, and
-  rejects tokens minted without `exp` outright.
-- A custom `TokenAuthenticator` must carry `exp` and the application-binding
-  claim through into the `TokenClaims` raw bag; claims with no readable `exp`
-  are treated as expired rather than as never expiring.
+- `TokenClaims::$channels` and `TokenClaims::channels()` are `list<string>|null`
+  instead of `list<string>`, and the constructor default is `null` rather than
+  `[]`.
+- A custom `TokenAuthenticator` must carry `exp` and the binding claim through
+  into the `TokenClaims` raw bag; claims with no readable `exp` count as
+  expired.
+
+### Upgrading
+
+Every item below can reject a token that 0.2.2 accepted. Nothing here is opt-in
+except the migration switch.
+
+**Tokens must name their application.** The binding claim is `app_id` by
+default (remap with `claims.app_id`) and its value is matched against the
+connection's Resonate application id, the `app_id` in `config/reverb.php`, not
+the app key. A claim naming a different application is always fatal and reports
+`application_mismatch`. `require_app_claim` (default `true`) decides only what
+happens to a token carrying no binding claim at all; it never forgives a
+mismatch. The check runs on `pusher:subscribe` and on `app:authenticate`.
+
+**`exp` is mandatory.** A token without one is rejected as invalid rather than
+treated as eternal.
+
+**An empty `channels` claim denies everything.** `channels()` now returns
+`null` when the token carried no allow-list and a list when it did, so `[]` is
+an allow-list that permits nothing. A custom `ChannelAuthorizer` that read `[]`
+as "no restriction" must test for `null` instead, or it will keep failing open.
+A `channels` claim that is not a list of strings is now rejected as an invalid
+token instead of being coerced to `[]`.
+
+**Cached claims go stale.** Claims cached by `app:authenticate` are re-checked
+against `exp` (with the configured `leeway`) before every subscribe that relies
+on them, and a stale cache reports `expired_token`. Existing subscriptions are
+untouched: the client either sends a fresh token with the next subscribe, which
+overrides the cache, or reconnects and pre-authenticates again.
+
+What token issuers need to change:
+
+1. Add the binding claim: `'app_id' => config('reverb.apps.apps.0.app_id')`.
+2. Add `exp` to every token, kept short (minutes, not days).
+3. Send `channels` only when the token should be limited to particular
+   channels, and never send it empty. Omit it for no token-level restriction.
+4. Carry `exp` and the binding claim into `TokenClaims::$raw` in any custom
+   `TokenAuthenticator`.
+
+To roll this out without downtime, set
+`RESONATE_TOKEN_AUTH_REQUIRE_APP_CLAIM=false` and deploy, update the issuers,
+let the old tokens expire, then set it back to `true`.
 
 ## [0.2.2] - 2026-07-30
 
@@ -136,6 +157,9 @@ Initial release.
 - `TokenAuthServiceProvider`: merges config and binds the two defaults;
   publishes config via `vendor:publish --tag=resonate-token-auth-config`.
 
-[Unreleased]: https://github.com/webpatser/resonate-token-auth/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/webpatser/resonate-token-auth/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/webpatser/resonate-token-auth/compare/v0.2.2...v0.3.0
+[0.2.2]: https://github.com/webpatser/resonate-token-auth/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/webpatser/resonate-token-auth/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/webpatser/resonate-token-auth/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/webpatser/resonate-token-auth/releases/tag/v0.1.0
