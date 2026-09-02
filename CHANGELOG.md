@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Verified against `webpatser/resonate` v0.6.1 and `webpatser/fledge-fiber` v13.30.1.0. No code change: this package holds no Redis connection of its own and touches no API the server release moved.
+
 ## [0.3.1] - 2026-08-02
 
 ### Fixed
