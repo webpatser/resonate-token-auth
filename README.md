@@ -199,7 +199,7 @@ Mobile clients fetch this on login and pass it in `pusher:subscribe.data.token`.
 ## Requirements
 
 - PHP 8.5+
-- Resonate 0.4+
+- Resonate 0.7+
 
 ## Testing
 
