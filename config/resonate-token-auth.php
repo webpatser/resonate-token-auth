@@ -81,6 +81,22 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Pin identity
+    |--------------------------------------------------------------------------
+    |
+    | Per-subscribe tokens are independent bearer tokens, so a connection that
+    | pre-authenticated as one user can still subscribe with a token minted for
+    | another. Set this to true to reject a per-subscribe token whose subject
+    | (the user id claim) differs from the identity the connection
+    | pre-authenticated as. Connections that never sent `app:authenticate` are
+    | not affected. Off by default.
+    |
+    */
+
+    'pin_identity' => (bool) env('RESONATE_TOKEN_AUTH_PIN_IDENTITY', false),
+
+    /*
+    |--------------------------------------------------------------------------
     | Claim mapping
     |--------------------------------------------------------------------------
     |

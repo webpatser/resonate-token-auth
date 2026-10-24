@@ -69,6 +69,12 @@ class TokenAuthPlugin implements MessageInterceptor, ServerPlugin
     protected int $leeway = 30;
 
     /**
+     * Whether a per-subscribe token must carry the same subject as the
+     * connection's pre-authenticated identity.
+     */
+    protected bool $pinIdentity = false;
+
+    /**
      * Boot the plugin: resolve the authenticator and authorizer, and read the
      * settings the plugin itself enforces (application binding, leeway).
      */
@@ -84,6 +90,7 @@ class TokenAuthPlugin implements MessageInterceptor, ServerPlugin
         $this->appClaim = (string) ($claims['app_id'] ?? 'app_id');
         $this->requireAppClaim = (bool) ($config['require_app_claim'] ?? true);
         $this->leeway = (int) ($config['leeway'] ?? 30);
+        $this->pinIdentity = (bool) ($config['pin_identity'] ?? false);
     }
 
     /**
@@ -151,6 +158,12 @@ class TokenAuthPlugin implements MessageInterceptor, ServerPlugin
 
         if (! $this->boundToApplication($claims, $from)) {
             $this->reject($from, 'Token not valid for this application', TokenRejected::APPLICATION_MISMATCH);
+
+            return MessageDisposition::Rejected;
+        }
+
+        if ($tokenSupplied && $this->pinIdentity && ! $this->matchesPreAuthIdentity($claims, $from)) {
+            $this->reject($from, 'Token subject does not match the authenticated identity', TokenRejected::IDENTITY_MISMATCH);
 
             return MessageDisposition::Rejected;
         }
@@ -303,6 +316,22 @@ class TokenAuthPlugin implements MessageInterceptor, ServerPlugin
         }
 
         return (string) $claimed === $from->app()->id();
+    }
+
+    /**
+     * Determine whether a per-subscribe token's subject equals the identity the
+     * connection pre-authenticated as. A connection that never pre-authenticated
+     * has no identity to pin, so any valid token passes.
+     */
+    protected function matchesPreAuthIdentity(TokenClaims $claims, Connection $from): bool
+    {
+        $cached = $from->state('token.claims');
+
+        if (! $cached instanceof TokenClaims) {
+            return true;
+        }
+
+        return hash_equals((string) $cached->userId(), (string) $claims->userId());
     }
 
     /**

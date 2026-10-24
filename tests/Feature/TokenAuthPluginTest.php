@@ -484,3 +484,58 @@ it('accepts a re-authenticate with another subject once the cached claims expire
         ->and($connection->received('app:authenticated'))->toBeTrue()
         ->and($connection->state('token.claims')->userId())->toBe('u-second');
 });
+
+it('rejects a per-subscribe token for another subject when pin_identity is on', function () {
+    config(['resonate-token-auth.pin_identity' => true]);
+    Event::fake([TokenRejected::class]);
+    $plugin = bootPlugin();
+    $connection = makeConnection();
+
+    $plugin->onMessage($connection, [
+        'event' => 'app:authenticate',
+        'data' => ['token' => makeToken(['sub' => 'u-first'])],
+    ]);
+
+    $other = $plugin->onMessage($connection, [
+        'event' => 'pusher:subscribe',
+        'data' => ['channel' => 'private-billing', 'token' => makeToken(['sub' => 'u-second'])],
+    ]);
+    $same = $plugin->onMessage($connection, [
+        'event' => 'pusher:subscribe',
+        'data' => ['channel' => 'private-billing', 'token' => makeToken(['sub' => 'u-first'])],
+    ]);
+
+    expect($other)->toBe(MessageDisposition::Rejected)
+        ->and($same)->toBe(MessageDisposition::Handled);
+
+    Event::assertDispatched(TokenRejected::class, fn (TokenRejected $e) => $e->reason === TokenRejected::IDENTITY_MISMATCH);
+});
+
+it('accepts a per-subscribe token for another subject by default', function () {
+    $plugin = bootPlugin();
+    $connection = makeConnection();
+
+    $plugin->onMessage($connection, [
+        'event' => 'app:authenticate',
+        'data' => ['token' => makeToken(['sub' => 'u-first'])],
+    ]);
+
+    $disposition = $plugin->onMessage($connection, [
+        'event' => 'pusher:subscribe',
+        'data' => ['channel' => 'private-billing', 'token' => makeToken(['sub' => 'u-second'])],
+    ]);
+
+    expect($disposition)->toBe(MessageDisposition::Handled);
+});
+
+it('does not pin identity on a connection that never pre-authenticated', function () {
+    config(['resonate-token-auth.pin_identity' => true]);
+    $plugin = bootPlugin();
+
+    $disposition = $plugin->onMessage(makeConnection(), [
+        'event' => 'pusher:subscribe',
+        'data' => ['channel' => 'private-billing', 'token' => makeToken(['sub' => 'u-second'])],
+    ]);
+
+    expect($disposition)->toBe(MessageDisposition::Handled);
+});

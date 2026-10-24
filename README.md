@@ -134,6 +134,7 @@ RESONATE_TOKEN_AUTH_SECRET=your-shared-jwt-secret
 | `audience` | `null` | When set, the token's `aud` claim must match (string or list). |
 | `leeway` | `30` | Seconds of clock skew tolerated on `exp`/`nbf`/`iat`, and when re-checking cached claims. |
 | `require_app_claim` | `true` | Whether a token with no application-binding claim is accepted. A *mismatching* claim is rejected either way. |
+| `pin_identity` | `false` | When true, a per-subscribe token whose subject differs from the connection's pre-authenticated identity is rejected (`identity_mismatch`). |
 | `claims.user_id` | `sub` | Which JWT claim is the user id. |
 | `claims.user_info` | `user_info` | Which claim holds optional presence user info. |
 | `claims.channels` | `channels` | Which claim, if present, lists allowed channels (glob patterns). |
