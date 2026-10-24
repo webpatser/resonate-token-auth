@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-24
+
 ### Fixed
 
 - A connection can no longer switch identity with a second `app:authenticate`. A token for a different subject is rejected with a `pusher:error` (reason `already_authenticated`) while the cached claims are still valid, instead of replying `app:authenticated` with a user id that differs from the cached claims. Re-authenticating with a token for the same subject (a refresh), or with any valid token once the cached claims have expired, still replaces the claims as before.
