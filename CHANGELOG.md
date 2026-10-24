@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-24
+
+Stable release. Requires `webpatser/resonate` `^1.0`. No API changes; see [UPGRADE.md](UPGRADE.md).
+
+### Changed
+
+- Require `webpatser/resonate` `^1.0` (was `^0.7`)
+
 ## [0.7.1] - 2026-10-24
 
 ### Fixed
@@ -192,8 +200,13 @@ Initial release.
 - `TokenAuthServiceProvider`: merges config and binds the two defaults;
   publishes config via `vendor:publish --tag=resonate-token-auth-config`.
 
-[Unreleased]: https://github.com/webpatser/resonate-token-auth/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/webpatser/resonate-token-auth/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/webpatser/resonate-token-auth/compare/v0.7.1...v1.0.0
+[0.7.1]: https://github.com/webpatser/resonate-token-auth/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/webpatser/resonate-token-auth/compare/v0.3.3...v0.7.0
 [0.3.3]: https://github.com/webpatser/resonate-token-auth/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/webpatser/resonate-token-auth/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/webpatser/resonate-token-auth/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/webpatser/resonate-token-auth/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/webpatser/resonate-token-auth/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/webpatser/resonate-token-auth/compare/v0.2.0...v0.2.1
