@@ -232,6 +232,30 @@ it('does not change identity on a second pre-authenticate', function () {
     expect($claims->userId())->toBe('u-first');
 });
 
+it('rejects a different-subject pre-authenticate while the cached claims are valid', function () {
+    Event::fake([TokenRejected::class]);
+    $plugin = bootPlugin();
+    $connection = makeConnection();
+
+    $plugin->onMessage($connection, [
+        'event' => 'app:authenticate',
+        'data' => ['token' => makeToken(['sub' => 'u-first'])],
+    ]);
+    $connection->messages = [];
+
+    $disposition = $plugin->onMessage($connection, [
+        'event' => 'app:authenticate',
+        'data' => ['token' => makeToken(['sub' => 'u-second'])],
+    ]);
+
+    expect($disposition)->toBe(MessageDisposition::Rejected)
+        ->and($connection->received('pusher:error'))->toBeTrue()
+        ->and($connection->received('app:authenticated'))->toBeFalse()
+        ->and($connection->state('token.claims')->userId())->toBe('u-first');
+
+    Event::assertDispatched(TokenRejected::class, fn (TokenRejected $e) => $e->reason === TokenRejected::ALREADY_AUTHENTICATED);
+});
+
 it('rejects a subscribe with a token minted for another application', function () {
     Event::fake([TokenRejected::class]);
     $plugin = bootPlugin();
@@ -418,4 +442,45 @@ it('relays unrelated events untouched', function () {
     $disposition = $plugin->onMessage($connection, ['event' => 'pusher:ping', 'data' => []]);
 
     expect($disposition)->toBe(MessageDisposition::Relay);
+});
+
+it('accepts a second pre-authenticate with the same subject as a token refresh', function () {
+    $plugin = bootPlugin();
+    $connection = makeConnection();
+
+    $plugin->onMessage($connection, [
+        'event' => 'app:authenticate',
+        'data' => ['token' => makeToken(['sub' => 'u-1', 'exp' => time() + 60])],
+    ]);
+    $connection->messages = [];
+
+    $disposition = $plugin->onMessage($connection, [
+        'event' => 'app:authenticate',
+        'data' => ['token' => makeToken(['sub' => 'u-1', 'exp' => time() + 600])],
+    ]);
+
+    expect($disposition)->toBe(MessageDisposition::Handled)
+        ->and($connection->received('app:authenticated'))->toBeTrue()
+        ->and($connection->state('token.claims')->hasExpired(0))->toBeFalse();
+});
+
+it('accepts a re-authenticate with another subject once the cached claims expired', function () {
+    $plugin = bootPlugin();
+    $connection = makeConnection();
+
+    $plugin->onMessage($connection, [
+        'event' => 'app:authenticate',
+        'data' => ['token' => makeToken(['sub' => 'u-first'])],
+    ]);
+    $connection->setState('token.claims', new TokenClaims('u-first', null, null, ['exp' => time() - 3600]));
+    $connection->messages = [];
+
+    $disposition = $plugin->onMessage($connection, [
+        'event' => 'app:authenticate',
+        'data' => ['token' => makeToken(['sub' => 'u-second'])],
+    ]);
+
+    expect($disposition)->toBe(MessageDisposition::Handled)
+        ->and($connection->received('app:authenticated'))->toBeTrue()
+        ->and($connection->state('token.claims')->userId())->toBe('u-second');
 });

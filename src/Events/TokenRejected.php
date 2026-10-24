@@ -9,7 +9,7 @@ use Illuminate\Foundation\Events\Dispatchable;
  *
  * Dispatched once per rejection. The `$reason` is a stable, low-cardinality
  * label so a metrics consumer can bucket: `'missing_token'`, `'invalid_token'`,
- * `'unauthorized_channel'`, `'expired_token'`, or `'application_mismatch'`.
+ * `'unauthorized_channel'`, `'expired_token'`, `'application_mismatch'`, `'already_authenticated'`, or `'identity_mismatch'`.
  */
 class TokenRejected
 {
@@ -36,6 +36,17 @@ class TokenRejected
      * is being presented on another tenant's app key.
      */
     public const APPLICATION_MISMATCH = 'application_mismatch';
+
+    /**
+     * A second `app:authenticate` arrived on an already authenticated connection.
+     */
+    public const ALREADY_AUTHENTICATED = 'already_authenticated';
+
+    /**
+     * With `pin_identity` on, a per-subscribe token's subject differs from the
+     * identity the connection pre-authenticated as.
+     */
+    public const IDENTITY_MISMATCH = 'identity_mismatch';
 
     /**
      * Create a new event instance.

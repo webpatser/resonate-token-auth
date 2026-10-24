@@ -195,11 +195,24 @@ class TokenAuthPlugin implements MessageInterceptor, ServerPlugin
             return MessageDisposition::Rejected;
         }
 
-        // The first valid pre-auth wins; subsequent ones are ignored so a
-        // long-lived connection cannot silently change identity.
-        if (! $from->hasState('token.claims')) {
-            $from->setState('token.claims', $claims);
+        // A connection may re-authenticate to refresh its token (same subject)
+        // or once its cached claims have expired, which is exactly what the
+        // server tells clients to do. Switching to a different subject while
+        // the cached claims are still valid is refused, so a live connection
+        // cannot change identity.
+        $cached = $from->state('token.claims');
+
+        if (
+            $cached instanceof TokenClaims
+            && ! $cached->hasExpired($this->leeway)
+            && ! hash_equals((string) $cached->userId(), (string) $claims->userId())
+        ) {
+            $this->reject($from, 'Connection is already authenticated', TokenRejected::ALREADY_AUTHENTICATED);
+
+            return MessageDisposition::Rejected;
         }
+
+        $from->setState('token.claims', $claims);
 
         $this->context->sendTo($from, 'app:authenticated', [
             'user_id' => $claims->userId(),
